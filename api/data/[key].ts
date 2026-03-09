@@ -6,9 +6,10 @@ dotenv.config();
 
 const router = express.Router();
 const API_KEY = process.env.API_KEY;
+const ONEDRIVE_ACCESS_TOKEN = process.env.ONEDRIVE_ACCESS_TOKEN;
+const ONEDRIVE_REFRESH_TOKEN = process.env.ONEDRIVE_REFRESH_TOKEN;
 const ONEDRIVE_CLIENT_ID = process.env.ONEDRIVE_CLIENT_ID;
 const ONEDRIVE_CLIENT_SECRET = process.env.ONEDRIVE_CLIENT_SECRET;
-const ONEDRIVE_REFRESH_TOKEN = process.env.ONEDRIVE_REFRESH_TOKEN;
 
 // In-memory cache with LRU-style eviction
 const cache: Record<string, { data: any; expires: number }> = {};
@@ -16,9 +17,8 @@ const CACHE_TTL = 30 * 1000; // 30 seconds
 const MAX_CACHE_SIZE = 1000;
 
 // Token cache
-let accessTokenCache: { token: string; expires: number } | null = null;
+let tokenCache: { token: string; expires: number } | null = null;
 
-// Reusable axios instance with optimized config
 const graphClient: AxiosInstance = axios.create({
   baseURL: 'https://graph.microsoft.com/v1.0',
   timeout: 10000,
@@ -34,33 +34,41 @@ async function getAccessToken(): Promise<string> {
   const now = Date.now();
   
   // Return cached token if still valid (with 5 min buffer)
-  if (accessTokenCache && accessTokenCache.expires > now + 300000) {
-    return accessTokenCache.token;
+  if (tokenCache && tokenCache.expires > now + 300000) {
+    return tokenCache.token;
   }
 
-  if (!ONEDRIVE_REFRESH_TOKEN || !ONEDRIVE_CLIENT_ID || !ONEDRIVE_CLIENT_SECRET) {
-    throw new Error('Missing refresh token or client credentials');
+  // If we have refresh credentials, get a new token
+  if (ONEDRIVE_REFRESH_TOKEN && ONEDRIVE_CLIENT_ID && ONEDRIVE_CLIENT_SECRET) {
+    try {
+      const res = await authClient.post('/common/oauth2/v2.0/token', new URLSearchParams({
+        client_id: ONEDRIVE_CLIENT_ID,
+        client_secret: ONEDRIVE_CLIENT_SECRET,
+        refresh_token: ONEDRIVE_REFRESH_TOKEN,
+        grant_type: 'refresh_token',
+      }), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+
+      tokenCache = {
+        token: res.data.access_token,
+        expires: now + (res.data.expires_in * 1000),
+      };
+
+      return res.data.access_token;
+    } catch (e: any) {
+      console.error('Token refresh failed:', e.response?.data?.error_description || e.message);
+      // Fall through to use static token if available
+    }
   }
 
-  try {
-    const res = await authClient.post('/common/oauth2/v2.0/token', new URLSearchParams({
-      client_id: ONEDRIVE_CLIENT_ID,
-      client_secret: ONEDRIVE_CLIENT_SECRET,
-      refresh_token: ONEDRIVE_REFRESH_TOKEN,
-      grant_type: 'refresh_token',
-    }), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-
-    accessTokenCache = {
-      token: res.data.access_token,
-      expires: now + (res.data.expires_in * 1000),
-    };
-
-    return res.data.access_token;
-  } catch (e: any) {
-    throw new Error(`Token refresh failed: ${e.response?.data?.error_description || e.message}`);
+  // Fall back to static token from env
+  if (ONEDRIVE_ACCESS_TOKEN) {
+    tokenCache = { token: ONEDRIVE_ACCESS_TOKEN, expires: now + 3300000 }; // ~55 min
+    return ONEDRIVE_ACCESS_TOKEN;
   }
+
+  throw new Error('No valid access token available');
 }
 
 function checkApiKey(req: Request, res: Response, next: () => void) {
@@ -167,6 +175,9 @@ router.delete('/', async (req: Request, res: Response) => {
 });
 
 router.post('/batch', async (req: Request, res: Response) => {
+  if (!ONEDRIVE_ACCESS_TOKEN && !ONEDRIVE_REFRESH_TOKEN) {
+    return res.status(500).json({ error: 'Missing OneDrive token' });
+  }
   const operations = req.body.operations;
   if (!Array.isArray(operations)) return res.status(400).json({ error: 'Missing operations array' });
 
