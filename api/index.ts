@@ -10,4 +10,9 @@ app.use('/api/auth', authRouter);
 app.use('/api/auth/callback', authCallbackRouter);
 app.use('/api/data/:key', dataRouter);
 
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
 export default app;

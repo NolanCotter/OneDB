@@ -12,4 +12,8 @@ app.use(express_1.default.json());
 app.use('/api/auth', auth_1.default);
 app.use('/api/auth/callback', callback_1.default);
 app.use('/api/data/:key', _key_1.default);
+// Health check
+app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok' });
+});
 exports.default = app;

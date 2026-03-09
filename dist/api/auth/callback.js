@@ -25,7 +25,12 @@ router.get('/', async (req, res) => {
         }), {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         });
-        res.json(tokenRes.data);
+        // Return the refresh token for storage
+        res.json({
+            access_token: tokenRes.data.access_token,
+            refresh_token: tokenRes.data.refresh_token,
+            expires_in: tokenRes.data.expires_in,
+        });
     }
     catch (e) {
         res.status(500).json({ error: e.response?.data?.error?.message || e.message });
